@@ -180,10 +180,20 @@ main(int argc, char *argv[])
   printf("Initialized I2C OASIS interface\n");
 
 	// !TESTING
-	uint16_t regData = 0;
+	uint8_t reg = OAS_REG_SENS_0;
 
-	if (oasis_interface_read_reg(&intf, OAS_REG_SENS_0, &regData) != 0){
-		fprintf(stderr, "[%s] Error reading register OAS_REG_SENS_0 of device. rc=%d\n", __func__, intf.err);
+	if (write(intf.fd, &reg, 1) < 0){
+		fprintf(stderr, "[%s] Failed to write to I2C interface\n", __func__);
 		exit(1);
 	}
+
+	printf("Successfully wrote to i2c interface\n");
+
+	if (read(intf.fd, &reg, 1) < 0) {
+		fprintf(stderr, "[%s] Failed to read from I2C Interface\n", __func__);
+		exit(1);
+	}
+
+	printf("Successfully read from I2C interface\n");
+	// ! END TESTING
 }
