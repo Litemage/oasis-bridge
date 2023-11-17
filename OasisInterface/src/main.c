@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <i2c/smbus.h>
 #include <linux/i2c-dev.h>
+#include <linux/i2c.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,74 +81,28 @@ oasis_interface_init(oasis_intf_handle pIntf, char *filename, int slaveAddr)
 }
 
 int
-oasis_interface_read_reg(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *regData)
+oasis_interface_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *pDistance)
 {
-  uint8_t dbuf[2] = {0, 0};
+	uint8_t dBuf[2] = {};
+	long funcs = 0;
 
-  // Check for errors
-  if (pIntf->err != 0)
-  {
-    return -1;
-  }
-
-  struct i2c_msg msgs[2] = {
-      {
-          .addr = pIntf->addr,
-          .flags = 0,
-          .len = 1,
-          .buf = &regAddr,
-      },
-      {
-          .addr = pIntf->addr,
-          .flags = I2C_M_RD,
-          .len = 2,
-          .buf = dbuf,
-      },
-  };
-
-  struct i2c_rdwr_ioctl_data ioctlRdwr = {
-      .msgs = msgs,
-      .nmsgs = 2,
-  };
-
-  if (ioctl(pIntf->fd, I2C_RDWR, &ioctlRdwr) != 0)
-  {
-    pIntf->err = errno;
-    return -1;
-  }
-
-	// TODO: Double-check if this is correct
-	// Assign data to buffer
-	*regData = (uint16_t)(dbuf[0] << 8 | dbuf[1]);
-
-  return 0;
-}
-
-int oasis_interface_get_sensor(oasis_intf_handle pIntf, int index, uint16_t *pDistance){
-
-	uint8_t reg = 0;
-
-	switch (index) {
-		case 0:
-			index = OAS_REG_SENS_0;
-			break;
-		case 1:
-			index = OAS_REG_SENS_1;
-			break;
-		case 2:
-			index = OAS_REG_SENS_2;
-			break;
-		case 3:
-			index = OAS_REG_SENS_3;
-			break;
-	}
-
-	if(oasis_interface_read_reg(pIntf, reg, pDistance) < 0){
-		// Error reading
+	// Check read functionality
+	ioctl(pIntf->fd, I2C_FUNCS, &funcs);
+	if (!(funcs & I2C_FUNC_SMBUS_READ_I2C_BLOCK)){
+		// Indicates this functionality isn't supported
+		pIntf->err = ENOTSUP;
 		return -1;
 	}
 
-	return 0;
+	if (i2c_smbus_read_i2c_block_data(pIntf->fd, regAddr, 2, dBuf) <= 0){
+		// No data available
+		pIntf->err = ENODATA;
+		return -1;
+	}
+
+	*pDistance = (uint16_t)(dBuf[0] << 8 | dBuf[1]);
+	
+  return 0;
 }
 
 // =============== STATIC VARIABLES ===============
@@ -166,7 +121,8 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  oasis_interface_init(&intf, argv[1], 0x40);
+	// 0x76 is the address of the BME280 sensor
+  oasis_interface_init(&intf, argv[1], 0x76);
   if (intf.err != 0)
   {
     fprintf(stderr, "[%s] Error intitializing I2C interface rc=%d\n", __func__, intf.err);
@@ -178,22 +134,18 @@ main(int argc, char *argv[])
   }
 
   printf("Initialized I2C OASIS interface\n");
+	printf("Interface info (after init):\n\taddr: %d\n\tfd: %d\n\terr: %d\n", intf.addr, intf.fd, intf.err);
 
-	// !TESTING
-	uint8_t reg = OAS_REG_SENS_0;
-
-	if (write(intf.fd, &reg, 1) < 0){
-		fprintf(stderr, "[%s] Failed to write to I2C interface\n", __func__);
+  // !TESTING
+	// 0xD0 is ID register of BME280
+	uint8_t id;
+	size_t numRead = 0;
+	numRead = i2c_smbus_read_i2c_block_data(intf.fd, 0xD0, 1, &id);
+	if (numRead <= 0){
+		fprintf(stderr, "Did not read any data...\nAborting...\n");
 		exit(1);
 	}
 
-	printf("Successfully wrote to i2c interface\n");
-
-	if (read(intf.fd, &reg, 1) < 0) {
-		fprintf(stderr, "[%s] Failed to read from I2C Interface\n", __func__);
-		exit(1);
-	}
-
-	printf("Successfully read from I2C interface\n");
-	// ! END TESTING
+	printf("Read the id: 0x%02X from the BME280 sensor\n", id);
+  // ! END TESTING
 }
