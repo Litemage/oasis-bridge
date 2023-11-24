@@ -53,13 +53,23 @@ Write Operation:
 
 ## Registers (Target)
 
-I don't think we'll need more than 255 registers...
+I don't think we'll need more than 255 registers, so 8-bit reg address...
 
 |==========================|
 | ADDRESS | DESCRIPTION    |
 |==========================|
-| 0x01    | Left Sensor    |
-| 0x02    | Front Sensor   |
-| 0x03    | Right Sensor   |
-| 0x04    | Down Sensor    |
+| 0x10    | Left Sensor    |
+| 0x11    | Front Sensor   |
+| 0x12    | Right Sensor   |
+| 0x13    | Down Sensor    |
 |==========================|
+
+The target device needs to implement the above registers and should have the following data at these registers:
+
+**Left Sensor** -> The distance that the left sensor on the robot detects, in cm
+
+**Front Sensor** -> Same as left sensor, but in front, in cm
+
+**Right Sensor** -> Same as above, but right, in cm
+
+**Down Sensor** -> Same as above, but downward facing, in cm

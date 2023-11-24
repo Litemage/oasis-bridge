@@ -154,6 +154,9 @@ void oasis_db_end(redisContext *pCtxt);
 
 // =============== MISC FUNCTIONS ===============
 
+/**
+ * @brief Dumps help for program
+ */
 void help(void);
 
 // =============== STATIC VARIABLES ===============
