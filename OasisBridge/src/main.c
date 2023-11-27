@@ -243,10 +243,10 @@ main(int argc, char *argv[])
   while (1)
   {
     // Handle getting sensor data
-    // sensor_read_task();
+    sensor_read_task();
 
     // Handle database affairs
-    // db_task();
+    db_task();
 
     printf("Ran task...\n");
 
