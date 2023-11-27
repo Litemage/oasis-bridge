@@ -1,6 +1,6 @@
 # Purpose
 
-The purpose of the O.A.S.I.S interface service is to poll a target i2c device 
+The purpose of the O.A.S.I.S bridge service is to poll a target i2c device 
 address which is expected to have sensor data at particular addresses. The 
 master device running this service will then post that data to a redis server 
 running locally.
@@ -53,7 +53,7 @@ Write Operation:
 
 ## Registers (Target)
 
-Expected registers by O.A.S.I.S interface
+O.A.S.I.S bridge service expects the following registers to be implemented on the target device:
 
 I don't think we'll need more than 255 registers, so 8-bit reg address...
 

@@ -1,4 +1,4 @@
-/*   O.A.S.I.S. Interface. A link between the central processor
+/*   O.A.S.I.S. Bridge. A link between the central processor
  *   and the coprocessor of the O.A.S.I.S. project.
  *
  *   Copyright (C) 2023  Jacob Simeone <jsimeone0105 at gamil dot com>
@@ -41,7 +41,7 @@
 #define OASIS_DB_IP   ("127.0.0.1")
 #define OASIS_DB_PORT (6379)
 
-// =============== OASIS INTERFACE ===============
+// =============== OASIS BRIDGE ===============
 
 /**
  * @brief "Registers" of peripheral
@@ -59,7 +59,7 @@ struct oasis_intf
 {
   int fd;               // File descriptor
   int addr;             // Slave address
-  int err;              // Holds errors from i2c interface
+  int err;              // Holds errors from i2c bridge
   int dbErr;            // Database error
   redisContext *dbCtxt; // Context of database connection
 };
@@ -74,7 +74,7 @@ typedef struct
 } SensorVals_t;
 
 /**
- * Type alias for a pointer to a oasis interface configuration structure.
+ * Type alias for a pointer to a oasis bridge configuration structure.
  *
  * Consumed by pretty much all API functions
  */
@@ -90,39 +90,39 @@ sleep_ms(int ms)
 }
 
 /**
- * @brief Initializes the interface to coprocessor over i2c, as well as sets the slave address
+ * @brief Initializes the bridge to coprocessor over i2c, as well as sets the slave address
  *
- * @param pIntf pointer to an empty interface handle
+ * @param pIntf pointer to an empty bridge handle
  * @param filename The name of the device file to access for i2c i.e: "/dev/i2c-0"
- * @param slaveAddr Address of slave, which has implemented the expected O.A.S.I.S target interface
+ * @param slaveAddr Address of slave, which has implemented the expected O.A.S.I.S target registers
  */
-void oasis_interface_init(oasis_intf_handle pIntf, char *filename, int slaveAddr);
+void oasis_bridge_init(oasis_intf_handle pIntf, char *filename, int slaveAddr);
 
 /**
  * @brief Perform an i2c read to retrieve the value of a sensor at some register. Will always read a 16-bit word.
  *
- * @param pIntf An initialized oasis interface handle
+ * @param pIntf An initialized oasis bridge handle
  * @param regAddr 8-bit register address to access on target device
  * @param [out] pDistnace Output buffer for distance (value of 8-bit register regAddr)
  */
-int oasis_interface_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *pDistance);
+int oasis_bridge_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *pDistance);
 
 /**
  * @brief
  *
- * @param pIntf An initialized oasis interface handle
+ * @param pIntf An initialized oasis bridge handle
  * @param [out] pDbuf Output data buffer for all sensor values
  *
  * @return 0 on success, -1 on error
  */
-int oasis_interface_get_distances(oasis_intf_handle pIntf, SensorVals_t *pDbuf);
+int oasis_bridge_get_distances(oasis_intf_handle pIntf, SensorVals_t *pDbuf);
 
 /**
  * @brief Stores data into redis db
  *
  * @return int 0 on success, -1 on failure
  */
-int oasis_interface_store_data(SensorVals_t *pSensVals);
+int oasis_bridge_store_data(SensorVals_t *pSensVals);
 
 // =============== DATABASE INTERFACE ===============
 
@@ -194,7 +194,7 @@ void
 sensor_read_task()
 {
   // Ignore errors for now...
-  oasis_interface_get_distances(&intf, &distances);
+  oasis_bridge_get_distances(&intf, &distances);
 }
 
 int
@@ -204,12 +204,12 @@ main(int argc, char *argv[])
   // Retrieve args
   if (argc != 2)
   {
-		help();
+    help();
     exit(1);
   }
 
   // 0x76 is the address of the BME280 sensor
-  oasis_interface_init(&intf, argv[1], 0x76);
+  oasis_bridge_init(&intf, argv[1], 0x76);
   if (intf.err != 0)
   {
     fprintf(stderr, "[%s] Error intitializing I2C interface rc=%d (%s)\n", __func__, intf.err, strerror(intf.err));
@@ -220,7 +220,7 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  printf("Initialized I2C OASIS interface\n");
+  printf("Initialized I2C OASIS bridge\n");
 
   if (oasis_db_connect(&pRedisContext, OASIS_DB_IP, OASIS_DB_PORT) != 0)
   {
@@ -231,9 +231,10 @@ main(int argc, char *argv[])
             OASIS_DB_PORT,
             errno,
             strerror(errno));
-		if (errno == ECONNREFUSED){
-			fprintf(stderr, "\tConnection refused, is the redis server running?\n");
-		}
+    if (errno == ECONNREFUSED)
+    {
+      fprintf(stderr, "\tConnection refused, is the redis server running?\n");
+    }
     exit(1);
   }
 
@@ -246,8 +247,8 @@ main(int argc, char *argv[])
 
     // Handle database affairs
     // db_task();
-		
-		printf("Ran task...\n");
+
+    printf("Ran task...\n");
 
     // The thread is eeby and neeby to seeby
     sleep_ms(SUPER_FREQ_MS);
@@ -257,7 +258,7 @@ main(int argc, char *argv[])
 // =============== PRIVATE DEFINITIONS ===============
 
 void
-oasis_interface_init(oasis_intf_handle pIntf, char *filename, int slaveAddr)
+oasis_bridge_init(oasis_intf_handle pIntf, char *filename, int slaveAddr)
 {
   int file;
 
@@ -293,7 +294,7 @@ oasis_interface_init(oasis_intf_handle pIntf, char *filename, int slaveAddr)
 }
 
 int
-oasis_interface_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *pDistance)
+oasis_bridge_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *pDistance)
 {
   uint8_t dBuf[2] = {};
   long funcs = 0;
@@ -320,29 +321,29 @@ oasis_interface_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *p
 }
 
 int
-oasis_interface_get_distances(oasis_intf_handle pIntf, SensorVals_t *pDbuf)
+oasis_bridge_get_distances(oasis_intf_handle pIntf, SensorVals_t *pDbuf)
 {
   uint16_t tmpBuf;
 
-  if (oasis_interface_get_sensor(pIntf, OAS_REG_SENS_0, &tmpBuf) != 0)
+  if (oasis_bridge_get_sensor(pIntf, OAS_REG_SENS_0, &tmpBuf) != 0)
   {
     return -1;
   }
   pDbuf->left = tmpBuf;
 
-  if (oasis_interface_get_sensor(pIntf, OAS_REG_SENS_1, &tmpBuf) != 0)
+  if (oasis_bridge_get_sensor(pIntf, OAS_REG_SENS_1, &tmpBuf) != 0)
   {
     return -1;
   }
   pDbuf->forward = tmpBuf;
 
-  if (oasis_interface_get_sensor(pIntf, OAS_REG_SENS_2, &tmpBuf) != 0)
+  if (oasis_bridge_get_sensor(pIntf, OAS_REG_SENS_2, &tmpBuf) != 0)
   {
     return -1;
   }
   pDbuf->right = tmpBuf;
 
-  if (oasis_interface_get_sensor(pIntf, OAS_REG_SENS_3, &tmpBuf) != 0)
+  if (oasis_bridge_get_sensor(pIntf, OAS_REG_SENS_3, &tmpBuf) != 0)
   {
     return -1;
   }
@@ -399,11 +400,10 @@ oasis_db_end(redisContext *pCtxt)
   redisFree(pCtxt);
 }
 
-
-void help(void){
-	printf(
-		"O.A.S.I.S interface for retrieving data from a co-processor\n"
-		"   usage: oasis-interface [i2c-dev file]\n"
-		"   i2c-dev file: a device file representing a i2c device adapter, like '/dev/i2c-0'\n\n"
-	);
+void
+help(void)
+{
+  printf("O.A.S.I.S bridge service for retrieving data from a co-processor, which implements the expected registers\n"
+         "   usage: oasis-bridge [i2c-dev file]\n"
+         "   i2c-dev file: a device file representing a i2c device adapter, like '/dev/i2c-0'\n\n");
 }
