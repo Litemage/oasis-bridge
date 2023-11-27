@@ -29,16 +29,16 @@ address, and then it's register address(es).
 
 See [this appnote from ti](https://www.ti.com/lit/an/slva704/slva704.pdf?ts=1700006656921) for some more i2c information
 
-The I2C Exchange should go something like this: ("*" indicates slave or "target" is in control of SDA line)
+The I2C Exchange should go something like this: ("\*" indicates slave or "target" is in control of SDA line)
 
 Read operation:
 |=============================================================================================================|
-| S | SLAVE ADDR + WRITE | A* | REGISTER ADDRESS | A* | Sr | SLAVE ADDR + READ | A* | REGISTER DATA* | NA | P |
+| S | SLAVE ADDR + WRITE | A\* | REGISTER ADDRESS | A\* | Sr | SLAVE ADDR + READ | A\* | REGISTER DATA\* | NA | P |
 |=============================================================================================================|
 
 Write Operation:
 |==============================================================================|
-| S | SLAVE ADDR + WRITE | A* | REGISTER ADDRESS | A* | REGISTER DATA | A* | P |
+| S | SLAVE ADDR + WRITE | A\* | REGISTER ADDRESS | A\* | REGISTER DATA | A\* | P |
 |==============================================================================|
 
 **LEGEND**
@@ -52,6 +52,8 @@ Write Operation:
 |=====================|
 
 ## Registers (Target)
+
+Expected registers by O.A.S.I.S interface
 
 I don't think we'll need more than 255 registers, so 8-bit reg address...
 
