@@ -1,0 +1,5 @@
+[Unit]
+Description="The OASIS bridge service for polling an i2c target, expected to implement OASIS registers. Must have a redis database running to post data to"
+
+[Service]
+ExecStart= # REPLACE WITH YOUR PATH TO BINARY HERE
