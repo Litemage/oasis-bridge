@@ -209,7 +209,7 @@ main(int argc, char *argv[])
   }
 
   // 0x76 is the address of the BME280 sensor
-  oasis_bridge_init(&intf, argv[1], 0x76);
+  oasis_bridge_init(&intf, argv[1], 0x40);
   if (intf.err != 0)
   {
     fprintf(stderr, "[%s] Error intitializing I2C interface rc=%d (%s)\n", __func__, intf.err, strerror(intf.err));
