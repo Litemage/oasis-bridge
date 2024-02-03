@@ -14,6 +14,103 @@ slave, so the plan is to access the co-processor (arduino, in our case) which
 will be the i2c slave, and we can implement an interrupt line between the 
 co-processor and the device running this service as a "data ready" line.
 
+# Installation & Quick-Start
+
+Follow these steps to get up and running with the oasis-bridge program.
+
+## Dependencies
+
+The oasis-bridge project has 2 dependencies:
+
+- The Linux kernel i2c device interface (you're fine if you're running on a Linux-based system)
+- [hiredis](https://github.com/redis/hiredis), which is used for accessing the redis database
+
+I'm going to assume that you're running either on an RPi or another similar OS. 
+
+### Make sure you have git installed:
+
+```
+sudo apt install git
+```
+
+### Installing hiredis
+
+To install hiredis, clone the repo:
+
+```
+git clone git@github.com:redis/hiredis.git
+```
+
+Ensure you have build tools (Cmake and the like):
+
+```
+sudo apt install build-essential
+```
+
+Navigate to the folder that was just cloned, created a build folder, and run the build
+
+```
+mkdir build
+cd build
+cmake ..
+```
+
+After that build succeeds, run:
+
+```
+make install
+```
+
+This should complete your install of hiredis
+
+### Make sure you have Redis installed
+
+Follow the Linux installation instructions on the [Redis website](https://redis.io/docs/install/install-redis/install-redis-on-linux/)
+
+### Building oasis-bridge
+
+First, clone the repo:
+
+```
+git clone http://github.com/Litemage/oasis-bridge.git
+```
+
+Navigate to the oasis-bridge repo that was just cloned, and run the following commands:
+
+```
+cd OasisBridge
+source ./build.sh
+```
+
+### Running oasis-bridge
+
+First, determine what i2c interface the co-processor is connected to. (something like: `/dev/i2c-1`). You can use the [i2c-tools](https://www.kali.org/tools/i2c-tools/) package to help with this. Install with:
+
+```
+sudo apt install i2c-tools
+```
+
+Note that you can also look at the available device interfaces by listing the files in the `/dev` directory:
+
+```
+ls -la /dev/i2c*
+```
+
+Next, make sure that the redis server is running locally:
+```
+sudo systemctl start redis-server.service 
+```
+
+Finally, navigate to the folder inside oasis-bridge repo: `(REPO FOLDER)/OasisBridge/build` and run:
+
+```
+oasis-bridge /dev/i2c-1
+```
+
+there is a good chance the /dev/i2c-1 file may be different for you.
+
+**This should be a complete set-up, data should now be bridging from i2c to redis :)**
+
 # Slave Expectations
 
 The I2C slave, also called the "target" is expected to have the following 
