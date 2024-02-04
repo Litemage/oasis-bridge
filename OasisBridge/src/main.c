@@ -36,7 +36,6 @@
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
-#include <math.h>
 
 // Redis client
 #include <hiredis/hiredis.h>
@@ -213,54 +212,8 @@ sensor_read_task()
   oasis_bridge_get_sensors(&intf, &distances);
 }
 
-// ! TESTING
 int
 main(int argc, char *argv[])
-{
-  static float sinIn = 0.0;
-  if (oasis_db_connect(&pRedisContext, OASIS_DB_IP, OASIS_DB_PORT) != 0)
-  {
-    fprintf(stderr,
-            "[%s] Error initializing redis database at [%s:%d] rc=%d (%s)\n",
-            __func__,
-            OASIS_DB_IP,
-            OASIS_DB_PORT,
-            errno,
-            strerror(errno));
-    if (errno == ECONNREFUSED)
-    {
-      fprintf(stderr, "\tConnection refused, is the redis server running?\n");
-    }
-    exit(1);
-  }
-
-  printf("Initialized connection to Redis DB\n");
-
-	static SensorVals_t vals = {0};
-
-	while (1){
-
-		sinIn+=0.01;
-
-		vals.forward = (uint16_t)abs((sin(sinIn + (PI / 2.0f)) * 200.0f));
-		vals.left = (uint16_t)abs((sin(sinIn + PI / 3.0f) * 200.0f));
-		vals.right = (uint16_t)abs((sin(sinIn + PI / 4.0f) * 200.0f));
-		vals.frntSensAngle = (uint16_t)abs((sin(sinIn + PI / 5.0f) * 180.0f));
-
-		if (oasis_db_post(pRedisContext, &vals) != 0){
-			fprintf(stderr, "Failed to post to Redis database\n");
-			exit(1);
-		}
-
-    printf("Published data... waiting 1000ms\n");
-    // The thread is eeby and neeby to seeby
-    sleep_ms(100);
-	}
-}
-// ! END TESTING
-
-int
-tmp_main(int argc, char *argv[])
 {
 
   // Retrieve args
