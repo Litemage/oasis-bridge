@@ -19,6 +19,9 @@
  *   ===TODO PARKING===
  *
  *   - [ ] Separate interface into static libraries
+ *   - [ ] Change sensor values to the following scheme:
+ *     - FRONT, LEFT, RIGHT sensor distances
+ *     - Front sensor scan angle
  */
 
 #include <errno.h>
@@ -49,10 +52,10 @@
  */
 enum OasisReg
 {
-  OAS_REG_SENS_0 = 0x10, // Left sensor
-  OAS_REG_SENS_1,        // Front sensor
-  OAS_REG_SENS_2,        // Right Sensor
-  OAS_REG_SENS_3,        // Downward Sensor
+  OAS_REG_SENS_0 = 0x10,   // Left sensor
+  OAS_REG_SENS_1,          // Front sensor
+  OAS_REG_SENS_2,          // Right Sensor
+  OAS_REG_FRNT_SENS_ANGLE, // Frontward facing sensor angle
 };
 
 struct oasis_intf
@@ -70,7 +73,7 @@ typedef struct
   uint16_t left;
   uint16_t forward;
   uint16_t right;
-  uint16_t down;
+  uint16_t frntSensAngle;
 } SensorVals_t;
 
 /**
@@ -115,7 +118,7 @@ int oasis_bridge_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *
  *
  * @return 0 on success, -1 on error
  */
-int oasis_bridge_get_distances(oasis_intf_handle pIntf, SensorVals_t *pDbuf);
+int oasis_bridge_get_sensors(oasis_intf_handle pIntf, SensorVals_t *pDbuf);
 
 /**
  * @brief Stores data into redis db
@@ -136,6 +139,17 @@ int oasis_bridge_store_data(SensorVals_t *pSensVals);
  * @return int 0 on success, -1 on fail, errno set accordingly.
  */
 int oasis_db_connect(redisContext **pCtxt, char *ip, int port);
+
+/**
+ * @brief Publishes the given value to the specified topic
+ *
+ * @param [in] pCtxt Initialized redis server context
+ * @param [in] pTopic Topic to publish too. Should be something like: oasis.front
+ * @param sensorVal Sensor value to publish to database
+ *
+ * @return int 0 on success, -1 on fail
+ */
+int oasis_db_publish(redisContext *pCtxt, char *pTopic, uint16_t sensorVal);
 
 /**
  * @brief Post sensor values to a redis stream in local database
@@ -194,11 +208,53 @@ void
 sensor_read_task()
 {
   // Ignore errors for now...
-  oasis_bridge_get_distances(&intf, &distances);
+  oasis_bridge_get_sensors(&intf, &distances);
 }
 
+// ! TESTING
 int
 main(int argc, char *argv[])
+{
+  if (oasis_db_connect(&pRedisContext, OASIS_DB_IP, OASIS_DB_PORT) != 0)
+  {
+    fprintf(stderr,
+            "[%s] Error initializing redis database at [%s:%d] rc=%d (%s)\n",
+            __func__,
+            OASIS_DB_IP,
+            OASIS_DB_PORT,
+            errno,
+            strerror(errno));
+    if (errno == ECONNREFUSED)
+    {
+      fprintf(stderr, "\tConnection refused, is the redis server running?\n");
+    }
+    exit(1);
+  }
+
+  printf("Initialized connection to Redis DB\n");
+
+	static SensorVals_t vals = {0};
+
+	while (1){
+
+		vals.forward++;
+		vals.left++;
+		vals.right++;
+		vals.frntSensAngle++;
+
+		if (oasis_db_post(pRedisContext, &vals) != 0){
+			fprintf(stderr, "Failed to post to Redis database\n");
+			exit(1);
+		}
+
+    // The thread is eeby and neeby to seeby
+    sleep_ms(1000);
+	}
+}
+// ! END TESTING
+
+int
+tmp_main(int argc, char *argv[])
 {
 
   // Retrieve args
@@ -208,7 +264,6 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  // 0x76 is the address of the BME280 sensor
   oasis_bridge_init(&intf, argv[1], 0x40);
   if (intf.err != 0)
   {
@@ -321,7 +376,7 @@ oasis_bridge_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *pDis
 }
 
 int
-oasis_bridge_get_distances(oasis_intf_handle pIntf, SensorVals_t *pDbuf)
+oasis_bridge_get_sensors(oasis_intf_handle pIntf, SensorVals_t *pDbuf)
 {
   uint16_t tmpBuf;
 
@@ -343,11 +398,11 @@ oasis_bridge_get_distances(oasis_intf_handle pIntf, SensorVals_t *pDbuf)
   }
   pDbuf->right = tmpBuf;
 
-  if (oasis_bridge_get_sensor(pIntf, OAS_REG_SENS_3, &tmpBuf) != 0)
+  if (oasis_bridge_get_sensor(pIntf, OAS_REG_FRNT_SENS_ANGLE, &tmpBuf) != 0)
   {
     return -1;
   }
-  pDbuf->down = tmpBuf;
+  pDbuf->frntSensAngle = tmpBuf;
 
   return 0;
 }
@@ -374,20 +429,35 @@ oasis_db_connect(redisContext **pCtxt, char *ip, int port)
 }
 
 int
-oasis_db_post(redisContext *pCtxt, SensorVals_t *pSensVals)
+oasis_db_publish(redisContext *pCtxt, char *pTopic, uint16_t sensorVal)
 {
   void *pReply;
 
-  pReply = redisCommand(pCtxt,
-                        "XADD robot:sensors * left_cm %d front_cm %d right_cm %d down_cm %d",
-                        pSensVals->left,
-                        pSensVals->forward,
-                        pSensVals->right,
-                        pSensVals->down);
+  pReply = redisCommand(pCtxt, "PUBLISH %s %u", pTopic, sensorVal);
 
-  // For now, just assume success if there was no error in the transaction.
   if (pReply == NULL)
   {
+    return -1;
+  }
+
+  freeReplyObject(pReply);
+  return 0;
+}
+
+int
+oasis_db_post(redisContext *pCtxt, SensorVals_t *pSensVals)
+{
+  void *pReply;
+  int rc = 0;
+
+  rc |= oasis_db_publish(pCtxt, "oasis.forward", pSensVals->forward);
+  rc |= oasis_db_publish(pCtxt, "oasis.left", pSensVals->left);
+  rc |= oasis_db_publish(pCtxt, "oasis.right", pSensVals->right);
+  rc |= oasis_db_publish(pCtxt, "oasis.forward_angle_deg", pSensVals->frntSensAngle);
+
+  if (rc != 0)
+  {
+    // Failed to publish in some way
     return -1;
   }
 
