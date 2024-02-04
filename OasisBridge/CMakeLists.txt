@@ -13,6 +13,9 @@ target_link_libraries(oasis-bridge i2c)
 # C Redis Client
 target_link_libraries(oasis-bridge hiredis)
 
+# C math
+target_link_libraries(oasis-bridge m)
+
 # Set include directory
 target_include_directories(oasis-bridge PUBLIC "${PROJECT_INCLUDE_DIR}")
 target_include_directories(oasis-bridge PUBLIC "${PROJECT_INCLUDE_DIR}")

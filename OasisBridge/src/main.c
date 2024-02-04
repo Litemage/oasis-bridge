@@ -36,10 +36,12 @@
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
+#include <math.h>
 
 // Redis client
 #include <hiredis/hiredis.h>
 
+#define PI (3.14159265)
 #define SUPER_FREQ_MS (500)
 #define OASIS_DB_IP   ("127.0.0.1")
 #define OASIS_DB_PORT (6379)
@@ -215,6 +217,7 @@ sensor_read_task()
 int
 main(int argc, char *argv[])
 {
+  static float sinIn = 0.0;
   if (oasis_db_connect(&pRedisContext, OASIS_DB_IP, OASIS_DB_PORT) != 0)
   {
     fprintf(stderr,
@@ -237,18 +240,21 @@ main(int argc, char *argv[])
 
 	while (1){
 
-		vals.forward++;
-		vals.left++;
-		vals.right++;
-		vals.frntSensAngle++;
+		sinIn+=0.01;
+
+		vals.forward = (uint16_t)abs((sin(sinIn + (PI / 2.0f)) * 200.0f));
+		vals.left = (uint16_t)abs((sin(sinIn + PI / 3.0f) * 200.0f));
+		vals.right = (uint16_t)abs((sin(sinIn + PI / 4.0f) * 200.0f));
+		vals.frntSensAngle = (uint16_t)abs((sin(sinIn + PI / 5.0f) * 180.0f));
 
 		if (oasis_db_post(pRedisContext, &vals) != 0){
 			fprintf(stderr, "Failed to post to Redis database\n");
 			exit(1);
 		}
 
+    printf("Published data... waiting 1000ms\n");
     // The thread is eeby and neeby to seeby
-    sleep_ms(1000);
+    sleep_ms(100);
 	}
 }
 // ! END TESTING
