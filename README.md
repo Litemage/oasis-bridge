@@ -141,7 +141,7 @@ Read operation:
     <td> Sr </td>
     <td> SLAVE ADDR + READ </td>
     <td> A* </td>
-    <td> REGISTER DATA\* </td>
+    <td> REGISTER DATA* </td>
     <td> NA </td>
     <td> P </td>
   </tr>
@@ -178,12 +178,12 @@ O.A.S.I.S bridge service expects the following registers to be implemented on th
 
 I don't think we'll need more than 255 registers, so 8-bit reg address...
 
-| ADDRESS | DESCRIPTION    |
-| --- | --- |
-| 0x10    | Left Sensor    |
-| 0x11    | Front Sensor   |
-| 0x12    | Right Sensor   |
-| 0x13    | Down Sensor    |
+| ADDRESS | DESCRIPTION           |
+| ---     | ---                   |
+| 0x10    | Left Sensor           |
+| 0x11    | Front Sensor          |
+| 0x12    | Right Sensor          |
+| 0x13    | Front Sensor Angle    |
 
 **NOTE: Each of these values are 16-bit words**
 
@@ -195,4 +195,4 @@ The target device needs to implement the above registers and should have the fol
 
 **Right Sensor** -> Same as above, but right, in cm
 
-**Down Sensor** -> Same as above, but downward facing, in cm
+**Front Sensor Angle** -> The angle of the fowrward-facing sensor, as per the robot's reference frame
