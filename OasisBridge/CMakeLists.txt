@@ -7,9 +7,6 @@ project(oasis-bridge)
 # Add executable with sources
 add_executable(oasis-bridge ./src/main.c)
 
-# Linux I2C
-target_link_libraries(oasis-bridge i2c)
-
 # C Redis Client
 target_link_libraries(oasis-bridge hiredis)
 
