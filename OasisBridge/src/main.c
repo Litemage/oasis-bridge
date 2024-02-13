@@ -19,7 +19,7 @@
  *   ===TODO PARKING===
  *
  *   - [ ] Separate interface into static libraries
- *   - [ ] Add option to post data to redis stream as well as pub/sub
+ *   - [X] Add option to post data to redis stream as well as pub/sub
  *   - [X] Move to UART communication interface
  */
 
@@ -43,13 +43,14 @@
 #define OASIS_DB_PORT      (6379)
 #define SAMPLE_FREQ        (500)
 
-// Serial interface commands
+// Serial interface commands & Settings
 #define OASIS_CMD_GET_DATA (0x0A) // Signals remote processor to send data
 #define PACKET_SIZE        (8)    // Size of packet we're expecting to receive (SensorValues_t)
 #define RX_BUF_SIZE        (64)   // Size of local rx buffer
 
 // =============== OASIS BRIDGE ===============
 
+// TYPES
 struct oasis_intf
 {
   int err;
@@ -73,16 +74,17 @@ typedef struct
  */
 typedef struct oasis_intf *oasis_intf_handle;
 
-void
-sleep_ms(int ms)
-{
-  struct timespec ts;
-  ts.tv_sec = ms / 1000;
-  ts.tv_nsec = (ms % 1000) * 1000000;
-  nanosleep(&ts, NULL);
-}
+// OASIS BRIDGE FUNCTIONS
 
-// TODO: fill in docs
+/**
+ * @brief Tries to open an interface to serial device at filename.
+ *   Tries to configure with 8n1, non-canonical mode, 115200 baud rate.
+ *   Returns nothing, but pIntf->err will be set with an error if failed.
+ *
+ * @param pIntf Oasis interface handle to initialize.
+ * @param [in] filename Name of device file to attempt to open. Should be of the pattern: "/dev/tty*"
+ *
+ */
 void oasis_bridge_init(oasis_intf_handle pIntf, char *filename);
 
 /**
@@ -104,6 +106,16 @@ int oasis_bridge_store_data(SensorVals_t *pSensVals);
  * @return int 0 on success, -1 on fail, errno set accordingly.
  */
 int oasis_db_connect(redisContext **pCtxt, char *ip, int port);
+
+/**
+ * @brief Posts data given to redis stream
+ *
+ * @param [in] pCtxt Initialized redis server context
+ * @param [in] pVals sensor values to post to the stream
+ *
+ * @return int 0 on success, -1 on fail
+ */
+int oasis_db_post_stream(redisContext *pCtxt, SensorVals_t *pVals);
 
 /**
  * @brief Publishes the given value to the specified topic
@@ -138,16 +150,30 @@ void oasis_db_end(redisContext *pCtxt);
  */
 void help(void);
 
+/**
+ * @brief Uses posix standard functions to sleep for some number of ms
+ *   NOT PORTABLE
+ *
+ * @param ms Number of ms to sleep for
+ */
+void
+sleep_ms(int ms)
+{
+  struct timespec ts;
+  ts.tv_sec = ms / 1000;
+  ts.tv_nsec = (ms % 1000) * 1000000;
+  nanosleep(&ts, NULL);
+}
+
 // =============== STATIC VARIABLES ===============
 
 static struct oasis_intf intf = {};
-static SensorVals_t distances = {};
 static redisContext *pRedisContext = NULL;
 
 // =============== MAIN ===============
 
 void
-db_task()
+db_task(SensorVals_t *pSensorVals)
 {
   static int reconCnt = 0;
   int rc;
@@ -160,7 +186,10 @@ db_task()
     return;
   }
 
-  rc = oasis_db_post(pRedisContext, &distances);
+  // Posts data to pub/sub in redis
+  rc |= oasis_db_post(pRedisContext, pSensorVals);
+  // Posts data to stream
+  rc |= oasis_db_post_stream(pRedisContext, pSensorVals);
   if (rc != 0)
   {
     // Assume connection failure. Ignore errors for now
@@ -170,14 +199,79 @@ db_task()
 }
 
 int
+coprocessor_read_task(SensorVals_t *pSensorVals)
+{
+  int failedReads = 0;
+  uint8_t rxBuf[RX_BUF_SIZE];
+  uint8_t txChar = OASIS_CMD_GET_DATA;
+  ssize_t txNum, rxNum, numReceived;
+
+  // Note that this request-response code is a little cheesed...
+  // Write request character
+  txNum = write(intf.fd, &txChar, 1);
+  if (txNum < 0)
+  {
+    fprintf(stderr, "ERROR: write(2) syscall failed rc=%d (%s)\n", errno, strerror(errno));
+    sleep_ms(SAMPLE_FREQ);
+    return -1;
+  }
+
+  while (numReceived < PACKET_SIZE)
+  {
+    if (failedReads > 3)
+    {
+      fprintf(stderr, "ERROR: Failed to retrieve message, not enough data received\n");
+      return -1;
+    }
+
+    rxNum = read(intf.fd, rxBuf + numReceived, sizeof(rxBuf) - numReceived);
+
+    if (rxNum < 0)
+    {
+      fprintf(stderr, "ERROR: read(2) syscall failed rc=%d (%s)\n", errno, strerror(errno));
+      return -1;
+    }
+    else if (rxNum == 0)
+    {
+      failedReads++;
+      continue;
+    }
+    else
+    {
+      numReceived += rxNum;
+    }
+  }
+
+  // numReceived being 0 indicates an error, also if we have more data than we expected
+  if (numReceived != 0 && numReceived == PACKET_SIZE)
+  {
+    // TESTING
+    printf("Rx buf: [");
+    for (int i = 0; i < numReceived; ++i)
+    {
+      printf("%02X ", rxBuf[i]);
+    }
+    printf("]\n");
+    // END
+
+    // Note that blindly copying memory isn't the safest thing in the world
+    *pSensorVals = *((SensorVals_t *)rxBuf);
+  }
+  else
+  {
+    fprintf(stderr, "ERROR: Received incorrect number of bytes for packet numReceived=%ld\n", numReceived);
+
+    return -1;
+  }
+
+  return 0;
+}
+
+int
 main(int argc, char *argv[])
 {
-  ssize_t txNum, rxNum, numReceived;
-  int failedReads;
-  uint8_t txChar = OASIS_CMD_GET_DATA;
-  uint8_t rxBuf[256];
-
-  numReceived = 0;
+  int rc;
+  SensorVals_t vals;
 
   // Retrieve args
   if (argc != 2)
@@ -193,15 +287,14 @@ main(int argc, char *argv[])
     if (intf.err == EACCES)
     {
       fprintf(stderr,
-              "\tPermission denied... perhaps you need 'sudo' privileges?\nEnsure that your user is part of the "
-              "dialout group. If not, run: \"sudo adduser $USER dialout\"");
+              "\tPermission denied... perhaps you need 'sudo' privileges?\n\tEnsure that your user is part of the "
+              "dialout group. If not, run: \"sudo adduser $USER dialout\"\n");
     }
     exit(1);
   }
 
   printf("Initialized UART OASIS bridge\n");
 
-  /*
   if (oasis_db_connect(&pRedisContext, OASIS_DB_IP, OASIS_DB_PORT) != 0)
   {
     fprintf(stderr,
@@ -219,67 +312,17 @@ main(int argc, char *argv[])
   }
 
   printf("Initialized connection to Redis DB\n");
-  */
 
   while (1)
   {
-    // Reset read attempts
-    failedReads = 0;
-
-    // Note that this request-response code is a little cheesed...
-    // Write request character
-    txNum = write(intf.fd, &txChar, 1);
-    if (txNum < 0)
+    if (coprocessor_read_task(&vals) == 0)
     {
-      fprintf(stderr, "ERROR: write(2) syscall failed rc=%d (%s)\n", errno, strerror(errno));
-      sleep_ms(SAMPLE_FREQ);
-      continue;
+      db_task(&vals);
     }
-
-    while (numReceived < PACKET_SIZE)
+    else
     {
-      if (failedReads > 3){
-        fprintf(stderr, "ERROR: Failed to retrieve message, not enough data received\n");
-        numReceived = 0;
-        break;
-      }
-
-      rxNum = read(intf.fd, rxBuf + numReceived, sizeof(rxBuf) - numReceived);
-
-      if (rxNum < 0)
-      {
-        fprintf(stderr, "ERROR: read(2) syscall failed rc=%d (%s)\n", errno, strerror(errno));
-        numReceived = 0;
-        break;
-      } else if (rxNum == 0){
-        failedReads++;
-        continue;
-      }
-      else
-      {
-        numReceived += rxNum;
-      }
+      fprintf(stderr, "ERROR: Coprocessor read task failed\n");
     }
-
-    // numReceived being 0 indicates an error, also if we have more data than we expected
-    if (numReceived != 0 && numReceived == PACKET_SIZE)
-    {
-      // Handle database affairs
-      // db_task();
-
-      // TESTING
-      printf("Rx buf: [");
-      for (int i = 0; i < numReceived; ++i)
-      {
-        printf("%02X ", rxBuf[i]);
-      }
-      printf("]\n");
-      // END
-    } else {
-      fprintf(stderr, "ERROR: Received incorrect number of bytes for packet numReceived=%ld\n", numReceived);
-    }
-
-    numReceived = 0;
 
     // The thread is eeby and neeby to seeby
     sleep_ms(SUPER_FREQ_MS);
@@ -334,9 +377,7 @@ oasis_bridge_init(oasis_intf_handle pIntf, char *filename)
   cfsetispeed(&options, B115200);
   cfsetospeed(&options, B115200);
 
-  /*
-   * Retrieved from man page example for raw data
-   */
+  // Retrieved from man page example for raw data
   options.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
   options.c_oflag &= ~OPOST;
   options.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
@@ -347,17 +388,14 @@ oasis_bridge_init(oasis_intf_handle pIntf, char *filename)
 
   tcsetattr(pIntf->fd, TCSANOW, &options);
 
-  // Flush any data that may already be in the interface
   /*
-   * Sleep needs to be here for tcflush to work properly
+   * Flush any data that may already be in the interface
    *
-   * See this stack overflow post:
-   * And this bug report:
+   * Sleep needs to be here for tcflush to work properly,
+   *   according to some online sources.
    */
   sleep(2);
   tcflush(pIntf->fd, TCIOFLUSH);
-
-  // TODO: call tcsetattr again to verify that all settings were done properly
 }
 
 int
@@ -376,6 +414,27 @@ oasis_db_connect(redisContext **pCtxt, char *ip, int port)
       errno = ENOMEM;
       return -1;
     }
+  }
+
+  return 0;
+}
+
+int
+oasis_db_post_stream(redisContext *pCtxt, SensorVals_t *pVals)
+{
+  void *pReply;
+
+  pReply = redisCommand(pCtxt,
+                        "XADD oasis:sensors * left_cm %d front_cm %d right_cm %d forward_angle_deg %d",
+                        pVals->left,
+                        pVals->forward,
+                        pVals->right,
+                        pVals->frntSensAngle);
+
+  // For now, just assume success if there was no error in the transaction.
+  if (pReply == NULL)
+  {
+    return -1;
   }
 
   return 0;
