@@ -19,52 +19,42 @@
  *   ===TODO PARKING===
  *
  *   - [ ] Separate interface into static libraries
- *   - [ ] Change sensor values to the following scheme:
- *     - FRONT, LEFT, RIGHT sensor distances
- *     - Front sensor scan angle
+ *   - [X] Add option to post data to redis stream as well as pub/sub
+ *   - [X] Move to UART communication interface
  */
 
 #include <errno.h>
 #include <fcntl.h>
-#include <i2c/smbus.h>
-#include <linux/i2c-dev.h>
-#include <linux/i2c.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <termios.h> // POSIX terminal configuration
 #include <time.h>
 #include <unistd.h>
 
 // Redis client
 #include <hiredis/hiredis.h>
 
-#define PI (3.14159265)
-#define SUPER_FREQ_MS (500)
-#define OASIS_DB_IP   ("127.0.0.1")
-#define OASIS_DB_PORT (6379)
+#define PI                 (3.14159265)
+#define SUPER_FREQ_MS      (500)
+#define OASIS_DB_IP        ("127.0.0.1")
+#define OASIS_DB_PORT      (6379)
+#define SAMPLE_FREQ        (500)
+
+// Serial interface commands & Settings
+#define OASIS_CMD_GET_DATA (0x0A) // Signals remote processor to send data
+#define PACKET_SIZE        (8)    // Size of packet we're expecting to receive (SensorValues_t)
+#define RX_BUF_SIZE        (64)   // Size of local rx buffer
 
 // =============== OASIS BRIDGE ===============
 
-/**
- * @brief "Registers" of peripheral
- *
- */
-enum OasisReg
-{
-  OAS_REG_SENS_0 = 0x10,   // Left sensor
-  OAS_REG_SENS_1,          // Front sensor
-  OAS_REG_SENS_2,          // Right Sensor
-  OAS_REG_FRNT_SENS_ANGLE, // Frontward facing sensor angle
-};
-
+// TYPES
 struct oasis_intf
 {
-  int fd;               // File descriptor
-  int addr;             // Slave address
-  int err;              // Holds errors from i2c bridge
-  int dbErr;            // Database error
+  int err;
+  int fd;
   redisContext *dbCtxt; // Context of database connection
 };
 
@@ -84,42 +74,18 @@ typedef struct
  */
 typedef struct oasis_intf *oasis_intf_handle;
 
-void
-sleep_ms(int ms)
-{
-  struct timespec ts;
-  ts.tv_sec = ms / 1000;
-  ts.tv_nsec = (ms % 1000) * 1000000;
-  nanosleep(&ts, NULL);
-}
+// OASIS BRIDGE FUNCTIONS
 
 /**
- * @brief Initializes the bridge to coprocessor over i2c, as well as sets the slave address
+ * @brief Tries to open an interface to serial device at filename.
+ *   Tries to configure with 8n1, non-canonical mode, 115200 baud rate.
+ *   Returns nothing, but pIntf->err will be set with an error if failed.
  *
- * @param pIntf pointer to an empty bridge handle
- * @param filename The name of the device file to access for i2c i.e: "/dev/i2c-0"
- * @param slaveAddr Address of slave, which has implemented the expected O.A.S.I.S target registers
+ * @param pIntf Oasis interface handle to initialize.
+ * @param [in] filename Name of device file to attempt to open. Should be of the pattern: "/dev/tty*"
+ *
  */
-void oasis_bridge_init(oasis_intf_handle pIntf, char *filename, int slaveAddr);
-
-/**
- * @brief Perform an i2c read to retrieve the value of a sensor at some register. Will always read a 16-bit word.
- *
- * @param pIntf An initialized oasis bridge handle
- * @param regAddr 8-bit register address to access on target device
- * @param [out] pDistnace Output buffer for distance (value of 8-bit register regAddr)
- */
-int oasis_bridge_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *pDistance);
-
-/**
- * @brief
- *
- * @param pIntf An initialized oasis bridge handle
- * @param [out] pDbuf Output data buffer for all sensor values
- *
- * @return 0 on success, -1 on error
- */
-int oasis_bridge_get_sensors(oasis_intf_handle pIntf, SensorVals_t *pDbuf);
+void oasis_bridge_init(oasis_intf_handle pIntf, char *filename);
 
 /**
  * @brief Stores data into redis db
@@ -140,6 +106,16 @@ int oasis_bridge_store_data(SensorVals_t *pSensVals);
  * @return int 0 on success, -1 on fail, errno set accordingly.
  */
 int oasis_db_connect(redisContext **pCtxt, char *ip, int port);
+
+/**
+ * @brief Posts data given to redis stream
+ *
+ * @param [in] pCtxt Initialized redis server context
+ * @param [in] pVals sensor values to post to the stream
+ *
+ * @return int 0 on success, -1 on fail
+ */
+int oasis_db_post_stream(redisContext *pCtxt, SensorVals_t *pVals);
 
 /**
  * @brief Publishes the given value to the specified topic
@@ -174,16 +150,30 @@ void oasis_db_end(redisContext *pCtxt);
  */
 void help(void);
 
+/**
+ * @brief Uses posix standard functions to sleep for some number of ms
+ *   NOT PORTABLE
+ *
+ * @param ms Number of ms to sleep for
+ */
+void
+sleep_ms(int ms)
+{
+  struct timespec ts;
+  ts.tv_sec = ms / 1000;
+  ts.tv_nsec = (ms % 1000) * 1000000;
+  nanosleep(&ts, NULL);
+}
+
 // =============== STATIC VARIABLES ===============
 
 static struct oasis_intf intf = {};
-static SensorVals_t distances = {};
 static redisContext *pRedisContext = NULL;
 
 // =============== MAIN ===============
 
 void
-db_task()
+db_task(SensorVals_t *pSensorVals)
 {
   static int reconCnt = 0;
   int rc;
@@ -196,7 +186,10 @@ db_task()
     return;
   }
 
-  rc = oasis_db_post(pRedisContext, &distances);
+  // Posts data to pub/sub in redis
+  rc |= oasis_db_post(pRedisContext, pSensorVals);
+  // Posts data to stream
+  rc |= oasis_db_post_stream(pRedisContext, pSensorVals);
   if (rc != 0)
   {
     // Assume connection failure. Ignore errors for now
@@ -205,16 +198,80 @@ db_task()
   }
 }
 
-void
-sensor_read_task()
+int
+coprocessor_read_task(SensorVals_t *pSensorVals)
 {
-  // Ignore errors for now...
-  oasis_bridge_get_sensors(&intf, &distances);
+  int failedReads = 0;
+  uint8_t rxBuf[RX_BUF_SIZE];
+  uint8_t txChar = OASIS_CMD_GET_DATA;
+  ssize_t txNum, rxNum, numReceived;
+
+  // Note that this request-response code is a little cheesed...
+  // Write request character
+  txNum = write(intf.fd, &txChar, 1);
+  if (txNum < 0)
+  {
+    fprintf(stderr, "ERROR: write(2) syscall failed rc=%d (%s)\n", errno, strerror(errno));
+    sleep_ms(SAMPLE_FREQ);
+    return -1;
+  }
+
+  while (numReceived < PACKET_SIZE)
+  {
+    if (failedReads > 3)
+    {
+      fprintf(stderr, "ERROR: Failed to retrieve message, not enough data received\n");
+      return -1;
+    }
+
+    rxNum = read(intf.fd, rxBuf + numReceived, sizeof(rxBuf) - numReceived);
+
+    if (rxNum < 0)
+    {
+      fprintf(stderr, "ERROR: read(2) syscall failed rc=%d (%s)\n", errno, strerror(errno));
+      return -1;
+    }
+    else if (rxNum == 0)
+    {
+      failedReads++;
+      continue;
+    }
+    else
+    {
+      numReceived += rxNum;
+    }
+  }
+
+  // numReceived being 0 indicates an error, also if we have more data than we expected
+  if (numReceived != 0 && numReceived == PACKET_SIZE)
+  {
+    // TESTING
+    printf("Rx buf: [");
+    for (int i = 0; i < numReceived; ++i)
+    {
+      printf("%02X ", rxBuf[i]);
+    }
+    printf("]\n");
+    // END
+
+    // Note that blindly copying memory isn't the safest thing in the world
+    *pSensorVals = *((SensorVals_t *)rxBuf);
+  }
+  else
+  {
+    fprintf(stderr, "ERROR: Received incorrect number of bytes for packet numReceived=%ld\n", numReceived);
+
+    return -1;
+  }
+
+  return 0;
 }
 
 int
 main(int argc, char *argv[])
 {
+  int rc;
+  SensorVals_t vals;
 
   // Retrieve args
   if (argc != 2)
@@ -223,18 +280,20 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  oasis_bridge_init(&intf, argv[1], 0x40);
+  oasis_bridge_init(&intf, argv[1]);
   if (intf.err != 0)
   {
-    fprintf(stderr, "[%s] Error intitializing I2C interface rc=%d (%s)\n", __func__, intf.err, strerror(intf.err));
+    fprintf(stderr, "[%s] Error intitializing UART interface rc=%d (%s)\n", __func__, intf.err, strerror(intf.err));
     if (intf.err == EACCES)
     {
-      fprintf(stderr, "\tPermission denied... perhaps you need 'sudo' privileges\n");
+      fprintf(stderr,
+              "\tPermission denied... perhaps you need 'sudo' privileges?\n\tEnsure that your user is part of the "
+              "dialout group. If not, run: \"sudo adduser $USER dialout\"\n");
     }
     exit(1);
   }
 
-  printf("Initialized I2C OASIS bridge\n");
+  printf("Initialized UART OASIS bridge\n");
 
   if (oasis_db_connect(&pRedisContext, OASIS_DB_IP, OASIS_DB_PORT) != 0)
   {
@@ -256,13 +315,14 @@ main(int argc, char *argv[])
 
   while (1)
   {
-    // Handle getting sensor data
-    sensor_read_task();
-
-    // Handle database affairs
-    db_task();
-
-    printf("Ran task...\n");
+    if (coprocessor_read_task(&vals) == 0)
+    {
+      db_task(&vals);
+    }
+    else
+    {
+      fprintf(stderr, "ERROR: Coprocessor read task failed\n");
+    }
 
     // The thread is eeby and neeby to seeby
     sleep_ms(SUPER_FREQ_MS);
@@ -272,9 +332,18 @@ main(int argc, char *argv[])
 // =============== PRIVATE DEFINITIONS ===============
 
 void
-oasis_bridge_init(oasis_intf_handle pIntf, char *filename, int slaveAddr)
+oasis_bridge_init(oasis_intf_handle pIntf, char *filename)
 {
+  /**
+   * Assuming that we are communicating with an arduino with the following RS232 params:
+   * - 8 data bits
+   * - no parity
+   * - 1 stop bit
+   * - not using flow control
+   * (8n1)
+   */
   int file;
+  struct termios options;
 
   /**
    * CHECK IF FILENAME EXISTS
@@ -289,7 +358,7 @@ oasis_bridge_init(oasis_intf_handle pIntf, char *filename, int slaveAddr)
     return;
   }
 
-  file = open(filename, O_RDWR);
+  file = open(filename, O_RDWR | O_NOCTTY);
   if (file < 0)
   {
     pIntf->err = errno;
@@ -298,72 +367,35 @@ oasis_bridge_init(oasis_intf_handle pIntf, char *filename, int slaveAddr)
 
   pIntf->fd = file;
 
-  if (ioctl(file, I2C_SLAVE, slaveAddr) < 0)
+  // Get current terminal options
+  if (tcgetattr(pIntf->fd, &options) != 0)
   {
     pIntf->err = errno;
-    return;
   }
 
-  pIntf->addr = slaveAddr;
-}
+  // Set baud rate to 115200
+  cfsetispeed(&options, B115200);
+  cfsetospeed(&options, B115200);
 
-int
-oasis_bridge_get_sensor(oasis_intf_handle pIntf, uint8_t regAddr, uint16_t *pDistance)
-{
-  uint8_t dBuf[2] = {};
-  long funcs = 0;
+  // Retrieved from man page example for raw data
+  options.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+  options.c_oflag &= ~OPOST;
+  options.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+  options.c_cflag &= ~(CSIZE | PARENB);
+  options.c_cflag |= CS8;
+  options.c_cc[VMIN] = 0;  // bytes; Number of bytes to retrieve before returning
+  options.c_cc[VTIME] = 0; // deciseconds; Timeout before read(2) returns
 
-  // Check read functionality
-  ioctl(pIntf->fd, I2C_FUNCS, &funcs);
-  if (!(funcs & I2C_FUNC_SMBUS_READ_I2C_BLOCK))
-  {
-    // Indicates this functionality isn't supported
-    pIntf->err = ENOTSUP;
-    return -1;
-  }
+  tcsetattr(pIntf->fd, TCSANOW, &options);
 
-  if (i2c_smbus_read_i2c_block_data(pIntf->fd, regAddr, 2, dBuf) <= 0)
-  {
-    // No data available
-    pIntf->err = ENODATA;
-    return -1;
-  }
-
-  *pDistance = (uint16_t)(dBuf[0] << 8 | dBuf[1]);
-
-  return 0;
-}
-
-int
-oasis_bridge_get_sensors(oasis_intf_handle pIntf, SensorVals_t *pDbuf)
-{
-  uint16_t tmpBuf;
-
-  if (oasis_bridge_get_sensor(pIntf, OAS_REG_SENS_0, &tmpBuf) != 0)
-  {
-    return -1;
-  }
-  pDbuf->left = tmpBuf;
-
-  if (oasis_bridge_get_sensor(pIntf, OAS_REG_SENS_1, &tmpBuf) != 0)
-  {
-    return -1;
-  }
-  pDbuf->forward = tmpBuf;
-
-  if (oasis_bridge_get_sensor(pIntf, OAS_REG_SENS_2, &tmpBuf) != 0)
-  {
-    return -1;
-  }
-  pDbuf->right = tmpBuf;
-
-  if (oasis_bridge_get_sensor(pIntf, OAS_REG_FRNT_SENS_ANGLE, &tmpBuf) != 0)
-  {
-    return -1;
-  }
-  pDbuf->frntSensAngle = tmpBuf;
-
-  return 0;
+  /*
+   * Flush any data that may already be in the interface
+   *
+   * Sleep needs to be here for tcflush to work properly,
+   *   according to some online sources.
+   */
+  sleep(2);
+  tcflush(pIntf->fd, TCIOFLUSH);
 }
 
 int
@@ -382,6 +414,27 @@ oasis_db_connect(redisContext **pCtxt, char *ip, int port)
       errno = ENOMEM;
       return -1;
     }
+  }
+
+  return 0;
+}
+
+int
+oasis_db_post_stream(redisContext *pCtxt, SensorVals_t *pVals)
+{
+  void *pReply;
+
+  pReply = redisCommand(pCtxt,
+                        "XADD oasis:sensors * left_cm %d front_cm %d right_cm %d forward_angle_deg %d",
+                        pVals->left,
+                        pVals->forward,
+                        pVals->right,
+                        pVals->frntSensAngle);
+
+  // For now, just assume success if there was no error in the transaction.
+  if (pReply == NULL)
+  {
+    return -1;
   }
 
   return 0;
@@ -432,7 +485,7 @@ oasis_db_end(redisContext *pCtxt)
 void
 help(void)
 {
-  printf("O.A.S.I.S bridge service for retrieving data from a co-processor, which implements the expected registers\n"
-         "   usage: oasis-bridge [i2c-dev file]\n"
-         "   i2c-dev file: a device file representing a i2c device adapter, like '/dev/i2c-0'\n\n");
+  printf("O.A.S.I.S bridge service for retrieving data from a co-processor, over RS-232 interface\n"
+         "   usage: oasis-bridge [serial dev file]\n"
+         "   serial dev file: a device file representing a serial device adapter, like '/dev/ttyx'\n\n");
 }
