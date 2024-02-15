@@ -116,7 +116,7 @@ The coprocessor should have the following RS2332 configuration to work with oasi
 
 The following sequence diagram should be implemented on the coprocessor oasis-bridge is accessing:
 
-![Untitled](https://github.com/Litemage/oasis-bridge/assets/77081880/975966ea-7465-49f7-8783-e0c381c1c3f6)
+![oasis-bridge-sequence](https://github.com/Litemage/oasis-bridge/assets/77081880/425c4bbf-c970-4456-83ab-1eb9ff74beca)
 
 **SensorVals_t frame format:**
 
