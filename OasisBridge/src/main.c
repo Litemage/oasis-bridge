@@ -335,7 +335,7 @@ void
 oasis_bridge_init(oasis_intf_handle pIntf, char *filename)
 {
   /**
-   * Assuming that we are communicating with an arduino with the following RS232 params:
+   * Assuming that we are communicating with an arduino with the following UART params:
    * - 8 data bits
    * - no parity
    * - 1 stop bit
@@ -485,7 +485,7 @@ oasis_db_end(redisContext *pCtxt)
 void
 help(void)
 {
-  printf("O.A.S.I.S bridge service for retrieving data from a co-processor, over RS-232 interface\n"
+  printf("O.A.S.I.S bridge service for retrieving data from a co-processor, over UART interface\n"
          "   usage: oasis-bridge [serial dev file]\n"
          "   serial dev file: a device file representing a serial device adapter, like '/dev/ttyx'\n\n");
 }
