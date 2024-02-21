@@ -37,6 +37,7 @@
 // Redis client
 #include <hiredis/hiredis.h>
 
+#define TAG                ("oasis-bridge")
 #define PI                 (3.14159265)
 #define SUPER_FREQ_MS      (500)
 #define OASIS_DB_IP        ("127.0.0.1")
@@ -151,6 +152,11 @@ void oasis_db_end(redisContext *pCtxt);
 void help(void);
 
 /**
+ * @brief Dumps program header for user
+ */
+void program_info(void);
+
+/**
  * @brief Uses posix standard functions to sleep for some number of ms
  *   NOT PORTABLE
  *
@@ -246,12 +252,14 @@ coprocessor_read_task(SensorVals_t *pSensorVals)
   if (numReceived != 0 && numReceived == PACKET_SIZE)
   {
     // TESTING
+    /*
     printf("Rx buf: [");
     for (int i = 0; i < numReceived; ++i)
     {
       printf("%02X ", rxBuf[i]);
     }
     printf("]\n");
+    */
     // END
 
     // Note that blindly copying memory isn't the safest thing in the world
@@ -273,6 +281,9 @@ main(int argc, char *argv[])
   int rc;
   SensorVals_t vals;
 
+  // Print information to user
+  program_info();
+
   // Retrieve args
   if (argc != 2)
   {
@@ -283,7 +294,7 @@ main(int argc, char *argv[])
   oasis_bridge_init(&intf, argv[1]);
   if (intf.err != 0)
   {
-    fprintf(stderr, "[%s] Error intitializing UART interface rc=%d (%s)\n", __func__, intf.err, strerror(intf.err));
+    fprintf(stderr, "[%s] Error intitializing UART interface rc=%d (%s)\n", TAG, intf.err, strerror(intf.err));
     if (intf.err == EACCES)
     {
       fprintf(stderr,
@@ -299,7 +310,7 @@ main(int argc, char *argv[])
   {
     fprintf(stderr,
             "[%s] Error initializing redis database at [%s:%d] rc=%d (%s)\n",
-            __func__,
+            TAG,
             OASIS_DB_IP,
             OASIS_DB_PORT,
             errno,
@@ -487,5 +498,13 @@ help(void)
 {
   printf("O.A.S.I.S bridge service for retrieving data from a co-processor, over UART interface\n"
          "   usage: oasis-bridge [serial dev file]\n"
-         "   serial dev file: a device file representing a serial device adapter, like '/dev/ttyx'\n\n");
+         "   serial dev file: a device file representing a serial device adapter, like '/dev/ttyx'\n\n"
+	 "   AUTHOR: Jacob Simeone (jsimeone@mail.bradley.edu) & ECE398 FA 23\n"
+	 "   SRC   : https://github.com/Litemage/oasis-bridge\n"
+	 "   DATE  : 2024-02-21\n");
+}
+
+void
+program_info(void){
+  printf("O.A.S.I.S bridge starting...\n");
 }
